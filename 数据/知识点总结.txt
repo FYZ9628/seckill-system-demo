@@ -1,0 +1,727 @@
+1、MD5 + salt（盐）实现对登录密码加密
+（1）MD5加密
+
+    public static String md5(String src) {
+        return DigestUtils.md5Hex(src);
+    }
+
+（2）MD5+salt 加密
+
+private static final String salt = "1a2b3c4d";
+
+    public static String inputPassToFromPass(String inputPass) {
+        String str = "" + salt.charAt(0) + salt.charAt(2) + inputPass + salt.charAt(5) + salt.charAt(4);
+        return md5(str);
+    }
+
+
+2、Mybatis Plus逆向工程
+
+官网教程：https://baomidou.com/pages/d357af
+
+
+3、 @RestController 和 @Controller 区别
+要实现页面跳转不能用 @RestController， 只能用 @Controller
+因为 @RestController 默认会给这个类下所有的方法加上 @ResponseBody 注解
+
+
+4、使用注解实体类传输对象 DTO(VO) 下的属性做校验
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-validation</artifactId>
+		</dependency>
+
+
+controller中的入参加注解  @Valid
+
+
+    @RequestMapping("/doLogin")
+    @ResponseBody
+    public RespBean doLogin(@Valid LoginVo loginVo) {
+        return userService.doLogin(loginVo);
+    }
+
+
+传输对象中加注解 @NotNull，@Length(min = 32)
+
+public class LoginVo {
+
+    @NotNull
+    @IsMobile
+    private String mobile;
+
+    @NotNull
+    @Length(min = 32)
+    private String password;
+
+}
+
+
+5、自定义注解参数校验
+
+自定义注解
+
+@Target({METHOD, FIELD, ANNOTATION_TYPE, CONSTRUCTOR, PARAMETER, TYPE_USE})
+@Retention(RUNTIME)
+@Documented
+@Constraint(validatedBy = {IsMobileValidator.class})
+public @interface IsMobile {
+
+    boolean required() default true;
+
+    String message() default "手机号码格式错误";
+
+    Class<?>[] groups() default {};
+
+    Class<? extends Payload>[] payload() default {};
+}
+
+
+自定义规则
+
+public class IsMobileValidator implements ConstraintValidator<IsMobile, String> {
+
+    private boolean required = false;
+
+    /**
+     * 初始化
+     * @param constraintAnnotation
+     */
+    @Override
+    public void initialize(IsMobile constraintAnnotation) {
+        required = constraintAnnotation.required();
+    }
+
+    /**
+     * 进行校验
+     * @param value
+     * @param Context
+     * @return
+     */
+    @Override
+    public boolean isValid(String value, ConstraintValidatorContext Context) {
+        if (required) {
+            return ValidatorUtil.isMobile(value);
+        } else {
+            if (StringUtils.isEmpty(value)) {
+                return true;
+            } else {
+                return ValidatorUtil.isMobile(value);
+            }
+        }
+    }
+}
+
+
+
+6、异常处理
+（1）ErrorController、AbstractErrorController、BasicErrorController
+
+（2）@RestControllerAdvice、@ExceptionHandler
+
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(Exception.class)
+    public RespBean ExceptionHandler(Exception e) {
+        if (e instanceof GlobalException) {
+            GlobalException ex = (GlobalException) e;
+            return RespBean.error(ex.getRespBeanEnum());
+        } else if (e instanceof BindException) {
+            BindException ex = (BindException) e;
+            RespBean respBean = RespBean.error(RespBeanEnum.BIND_ERROR);
+            respBean.setMessage("参数校验异常：" + ex.getBindingResult().getAllErrors().get(0).getDefaultMessage());
+            return respBean;
+        }
+        return RespBean.error(RespBeanEnum.ERROR);
+    }
+}
+
+
+
+7、springSession 实现分布式Session（浏览器不会存放用户信息，所以是安全的，浏览器只会存放一个userTicket（UUID））
+
+这三个依赖都要加上
+
+		<!-- spring data redis -->
+		<!-- 1.0 默认客户端为 jedis 非线程安全的 -->
+		<!-- 2.0 默认客户端为 lettuce 线程安全的 -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-redis</artifactId>
+		</dependency>
+
+		<!-- redis 使用的对象线程池 -->
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-pool2</artifactId>
+		</dependency>
+
+		<!-- spring-session 依赖 -->
+		<!-- 添加了这个依赖后，只要连接上了redis，就会自动将 spring session 存到 redis 中 -->
+		<!-- 但是数据是16进制的，看不出原来的数据的样子 -->
+		<dependency>
+			<groupId>org.springframework.session</groupId>
+			<artifactId>spring-session-data-redis</artifactId>
+		</dependency>
+
+spring:
+  # redis 配置
+  redis:
+    host: 127.0.0.1
+    port: 6379
+    password: root
+    # 数据库 （默认是 0 库）
+    database: 0
+    # 超时时间
+    timeout: 10000ms
+    lettuce:
+      pool:
+        # 最大连接数，默认 8
+        max-active: 8
+        # 最大连接阻塞等待时间，默认 -1（即一直等待）
+        max-wait: 10000ms
+        # 最大空闲连接，默认 8
+        max-idle: 200
+        # 最小空闲连接，默认 0
+        min-idle: 5
+
+
+springSession的原理：
+其实就是把会话数据放到了 redis 中，但是这个 session 是有过期时间的
+
+能实现分布式的原理：
+redis是放在另一个服务器上的，前端每次访问都会先根据 cookie 里的 key: userTicket，然后再根据userTicket获取session里的值，
+而session是存储在redis上的，redis是在另一个服务器上的，就算访问前端页面过程中存在页面跳转，
+并且跳转过程中因为负载均衡而导致访问的后端切换，也能自动校验登录用户信息user，给用户比较好的用户体验
+
+
+
+8、Redis存储用户信息（浏览器不会存放用户信息，所以是安全的，浏览器只会存放一个userTicket（UUID））
+
+		<!-- spring data redis -->
+		<!-- 1.0 默认客户端为 jedis 非线程安全的 -->
+		<!-- 2.0 默认客户端为 lettuce 线程安全的 -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-redis</artifactId>
+		</dependency>
+
+		<!-- redis 使用的对象线程池 -->
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-pool2</artifactId>
+		</dependency>
+
+
+
+spring:
+  # redis 配置
+  redis:
+    host: 127.0.0.1
+    port: 6379
+    password: root
+    # 数据库 （默认是 0 库）
+    database: 0
+    # 超时时间
+    timeout: 10000ms
+    lettuce:
+      pool:
+        # 最大连接数，默认 8
+        max-active: 8
+        # 最大连接阻塞等待时间，默认 -1（即一直等待）
+        max-wait: 10000ms
+        # 最大空闲连接，默认 8
+        max-idle: 200
+        # 最小空闲连接，默认 0
+        min-idle: 5
+
+能实现分布式的原理：
+redis是放在另一个服务器上的，前端每次访问都会先根据 cookie 里的 key: userTicket，获取其对应的值
+（所以浏览器的cookie存放的只有 key：userTicket，而userTicket是由UUID生成的随机值，每次登录都会不一样，
+所以cookie存的数据不是太重要），然后再根据cookie的值作为查询redis的key得到存在redis里的数据用户user
+
+
+9、拦截器自定义参数
+WebMvcConfigurer 中 
+
+@Autowired
+    private UserArgumentResolver userArgumentResolver;
+
+    @Override
+    public void addArgumentResolvers(List<HandlerMethodArgumentResolver> resolvers) {
+        resolvers.add(userArgumentResolver);
+    }
+
+
+自定义用户参数
+解决用户在不同页面之间跳转每次都查询登录用户的信息，这里做了统一处理
+
+@Component
+public class UserArgumentResolver implements HandlerMethodArgumentResolver {
+
+    @Autowired
+    private IUserService userService;
+
+    /**
+     * 若返回false，则不执行方法 resolveArgument()
+     * 若返回true，则执行方法 resolveArgument()
+     *
+     */
+    @Override
+    public boolean supportsParameter(MethodParameter parameter) {
+        Class<?> clazz = parameter.getParameterType();
+        return clazz == User.class;
+    }
+
+    /**
+     * 这里拦截是在进入Controller之前，而这里处理的参数会直接作为入参传给Controller的方法
+     *
+     */
+    @Override
+    public Object resolveArgument(MethodParameter parameter, ModelAndViewContainer mavContainer, NativeWebRequest webRequest, WebDataBinderFactory binderFactory) throws Exception {
+        HttpServletRequest request = webRequest.getNativeRequest(HttpServletRequest.class);
+        HttpServletResponse response = webRequest.getNativeResponse(HttpServletResponse.class);
+        String ticket = CookieUtil.getCookieValue(request, "userTicket");
+        if (StringUtils.isEmpty(ticket)) {
+            return null;
+        }
+        //返回 user 对象给 Controller的各个方法
+        return userService.getUserByCookie(ticket, request, response);
+    }
+}
+
+
+10、配置类与配置文件的关系
+
+配置类（configuration）优先级大于配置文件（application.yml）里的配置信息
+
+11、页面缓存
+将页面 html 渲染转成String类型存储到redis中
+
+ValueOperations valueOperations = redisTemplate.opsForValue();
+valueOperations.set("goodsList", html, 60, TimeUnit.SECONDS);
+
+
+也可以根据不同的路径将页面模板一样的但是数据不一样的页面都缓存起来
+valueOperations.set("goodsDetail:" + goodsId, html, 60, TimeUnit.SECONDS);
+
+
+12、对象缓存
+
+前面做登录的时候就做了对象缓存
+
+//将用户信息存入redis中
+redisTemplate.opsForValue().set("user:" + ticket, user);
+
+
+13、页面静态化
+
+浏览器中：F12 -> network -> All  
+其实是用了浏览器的缓存，响应码为 304，注意，这里要看页面的跳转链接，而不是其他的，例如：http://localhost:8080/goodsDetail.htm?goodsId=1
+
+后端项目配置文件 application.yml 中配置
+spring:
+  #静态资源处理
+  resources:
+    #启动默认静态资源处理，默认启动（所以在浏览器才能看到 304 这个响应码）
+    add-mappings: true
+    cache:
+      cachecontrol:
+        #缓存响应时间，单位秒
+        max-age: 3600
+    chain:
+      #资源配链启动缓存，默认启动
+      cache: true
+      #启动资源链，默认禁用
+      enabled: true
+      #启用压缩资源（gzip，brotil）解析，默认禁用
+      compressed: true
+      #启用h5应用缓存，默认禁用
+      html-application-cache: true
+    static-locations: classpath:/static/
+
+
+前后端分离的项目就是页面静态化后的
+
+使用 JQuery 和 ajax 实现
+
+
+14、解决超买超卖问题
+（1）防止用户重复购买（只能用于限购一个商品的）：添加唯一索引
+UNIQUE KEY `seckill_uuid_gid` (`user_id`,`goods_id`) USING BTREE COMMENT '用户id + 商品 id 的唯一索引，解决同一用户秒杀多商品'
+
+使用redis缓存：购买成功的用户会在redis中记录数据，可以在前面更快判断是否已经购买了商品，减少数据库的访问
+redisTemplate.opsForValue().set("order:" + user.getId() + ":" + goodsVo.getId(), seckillOrder);
+SeckillOrder seckillOrder = (SeckillOrder) redisTemplate.opsForValue().get("order:" + user.getId() + ":" + goodsId);
+        if (seckillOrder != null) {
+            return RespBean.error(RespBeanEnum.REPEAT_ERROR);
+        }
+
+
+（2）库存表更新库存时带上条件：防止库存变成负数
+boolean seckillGoodsResult = seckillGoodsService.update(new UpdateWrapper<SeckillGoods>()
+                .setSql("stock_count = stock_count - 1")
+                .eq("goods_id",seckillGoods.getId())
+                .gt("stock_count", 0));
+
+
+
+15、接口优化
+（1）redis预减库存，减少数据库的访问
+redis的递增递减操作，本身是原子性操作
+
+（2）内存标记，减少redis的访问：
+private Map<Long, Boolean> emptyStockMap = new HashMap<>();
+
+（3）请求进入队列缓存，异步下单，流量削峰
+rabbitmq实现
+
+（4）增强数据库：集群、分库分表
+
+
+16、redis实现分布式锁
+
+redis上锁锁时要添加过期时间，不然可能会因为异常导致锁无法释放，从而产生死锁
+
+	@Autowired
+	private RedisTemplate redisTemplate;
+
+	@Test
+	public void testLock02() {
+		ValueOperations valueOperations = redisTemplate.opsForValue();
+		//占位，如果key不存在才能设置成功
+		//给锁添加一个过期时间，防止应用在运行过程中抛出异常导致锁无法正常释放
+		boolean isLock = valueOperations.setIfAbsent("k1", "v1",30, TimeUnit.SECONDS);
+		//如果占位成功，进行正常操作
+		if (isLock) {
+			valueOperations.set("name", "xxx");
+			String name = (String) valueOperations.get("name");
+			System.out.println("name = " + name);
+//			Integer.parseInt("xxx");
+			//操作结束，删除锁
+			redisTemplate.delete("k1");
+		} else {
+			System.out.println("有线程在使用，请稍后再试");
+		}
+	}
+
+
+
+redis加载使用lua脚本（使用lua脚本可以使对redis的多个操作成为原子性，不会被拆分，要么都成功，要么都失败）
+
+在 RedisConfig 中添加
+
+    @Bean
+    public DefaultRedisScript<Long> Script() {
+        DefaultRedisScript<Long> redisScript = new DefaultRedisScript<>();
+        //lock.lua 脚本位置和 application.yml 同级目录
+        redisScript.setLocation(new ClassPathResource("stock.lua"));
+        redisScript.setResultType(Long.class);
+        return redisScript;
+    }
+
+脚本如下
+
+lua脚本在redis上执行是原子性的，不能被打断
+
+先判断是否存在传进来的key，有则获取key对应值，如果值大于0，则递减1，否则返回零
+
+if (redis.call('exists', KEYS[1]) == 1) then
+    local stock = tonumber(redis.call('get',KEYS[1]));
+    if(stock > 0) then
+        redis.call('incrby', KEYS[1],-1);
+        return stock;
+    end;
+        return -1;
+end;
+
+
+然后使用
+
+    @Autowired
+    private RedisScript<Long> script;
+
+        //用lua脚本进行递减的操作
+        Long stock = (Long) redisTemplate.execute(script,
+                Collections.singletonList("seckillGoods:" + goodsId), Collections.EMPTY_LIST);
+
+
+17、秒杀接口地址隐藏
+UUID生成字符串、MD5加密、Redis 存储
+
+（1）前端的秒杀按钮点击的时候会先发送请求到后端获取一个UUID字符串的盐加密，并且会将这个字符串存储到redis中：
+
+    public String createPath(User user, Long goodsId) {
+        String str = MD5Util.md5(UUIDUtil.uuid() + "123456");
+        redisTemplate.opsForValue().set("seckillPath:" + user.getId() + ":" + goodsId,
+                str, 60, TimeUnit.SECONDS);
+        return str;
+    }
+
+（2）前端在拿到这个字符串后再拼接 请求地址 向真正的秒杀接口发送请求，这时后端的秒杀接口要先校验这个地址是否是当前登录用户的地址
+
+public boolean checkPath(User user, Long goodsId, String path) {
+        if (user == null || goodsId < 0 || StringUtils.isEmpty(path)) {
+            return false;
+        }
+        String redisPath = (String) redisTemplate.opsForValue().get("seckillPath:" + user.getId() + ":" + goodsId);
+        return path.equals(redisPath);
+    }
+
+（3）只有校验通过了才允许用户对商品进行秒杀抢购
+
+
+18、生成验证码和校验验证码（算术验证码）
+
+作用：防止黄牛用脚本抢购；也可以拉长请求秒杀地址的时间跨度，减少对秒杀地址的瞬时请求量，减轻服务器压力，
+因为每个人完成验证码校验的时间是不一样的，先完成的先请求，后完成的后请求，就可以降低对秒杀地址的瞬时请求量
+
+
+		<!--EasyCaptcha 验证码依赖，地址：https://gitee.com/ele-admin/EasyCaptcha?_from=gitee_search -->
+		<dependency>
+			<groupId>com.github.whvcse</groupId>
+			<artifactId>easy-captcha</artifactId>
+			<version>1.6.2</version>
+		</dependency>
+
+
+
+    @RequestMapping(value = "/captcha", method = RequestMethod.GET)
+    @ResponseBody
+    public void verifyCode(User user, Long goodsId, HttpServletResponse response) {
+        if (user == null || goodsId < 0) {
+            throw new GlobalException(RespBeanEnum.REQUEST_ILLEGAL);
+        }
+
+        //设置请求头为输出图片的类型
+        response.setContentType("image/jpg");
+        response.setHeader("Pargam", "No-cache");
+        response.setHeader("Cache-Control", "no-cache");
+        response.setDateHeader("Expires", 0);
+
+        //生成验证码，将结果放入Redis
+        ArithmeticCaptcha captcha = new ArithmeticCaptcha(130, 32, 3);
+        redisTemplate.opsForValue().set("captcha:" + user.getId() + ":" + goodsId,
+                captcha.text(), 300, TimeUnit.SECONDS);
+        try {
+            captcha.out(response.getOutputStream());
+        } catch (IOException e) {
+            log.error("验证码生成失败，错误信息：{}",e.getMessage());
+        }
+    }
+
+
+    public boolean checkCaptcha(User user, Long goodsId, String captcha) {
+        if (StringUtils.isEmpty(captcha) || user == null || goodsId < 0) {
+            return false;
+        }
+        String redisCaptcha = (String) redisTemplate.opsForValue().get("captcha:" + user.getId() + ":" + goodsId);
+        return captcha.equals(redisCaptcha);
+    }
+
+
+
+19、接口限流
+作用：减轻服务器压力，保护服务器
+
+主流的限流算法：计数器、漏斗、令牌桶
+
+
+简单使用
+
+        ValueOperations valueOperations = redisTemplate.opsForValue();
+        String uri = request.getRequestURI();
+        Integer count = (Integer) valueOperations.get(uri + ":" + user.getId());
+        if (count == null) {
+            valueOperations.set(uri + ":" + user.getId(), 1, 30, TimeUnit.SECONDS);
+        } else if (count < 5) {
+            valueOperations.increment(uri + ":" + user.getId());
+        } else {
+            return RespBean.error(RespBeanEnum.ACCESS_LIMIT_REACHED);
+        }
+
+
+做成通用的，做成注解 @AccessLimit
+
+加在方法上
+
+    @AccessLimit(second = 30, maxCount = 5, needLogin= true)
+    @RequestMapping(value = "/path", method = RequestMethod.GET)
+    @ResponseBody
+    public RespBean getPath(User user, Long goodsId, String captcha, HttpServletRequest request) {}
+
+
+处理逻辑
+
+@Component
+public class AccessLimitIntercepter implements HandlerInterceptor {
+    @Autowired
+    private IUserService userService;
+    @Autowired
+    private RedisTemplate redisTemplate;
+
+    @Override
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+        if (handler instanceof HandlerMethod) {
+
+            User user = getUser(request, response);
+            UserContext.setUser(user);
+            //通过反射获取加了注解 @AccessLimit 的方法的值
+            HandlerMethod hm = (HandlerMethod) handler;
+            AccessLimit accessLimit = hm.getMethodAnnotation(AccessLimit.class);
+            if (accessLimit == null) {
+                return true;
+            }
+            int second = accessLimit.second();
+            int maxCount = accessLimit.maxCount();
+            boolean needLogin = accessLimit.needLogin();
+            //前端访问的请求路径url
+            String key = request.getRequestURI();
+            if (needLogin) {
+                if (user == null) {
+                    render(response, RespBeanEnum.SESSION_ERROR);
+                    return false;
+                }
+                key += ":" + user.getId();
+            }
+            //将url存放到redis中
+            ValueOperations valueOperations = redisTemplate.opsForValue();
+            Integer count = (Integer) valueOperations.get(key);
+            if (count == null) {
+                valueOperations.set(key, 1, second, TimeUnit.SECONDS);
+            } else if (count < maxCount) {
+                valueOperations.increment(key);
+            } else {
+                render(response, RespBeanEnum.ACCESS_LIMIT_REACHED);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 构建返回对象
+     *
+     * @param response
+     * @param respBeanEnum
+     */
+    private void render(HttpServletResponse response, RespBeanEnum respBeanEnum) throws IOException {
+        response.setContentType("application/json");
+        response.setCharacterEncoding("UTF-8");
+        PrintWriter out = response.getWriter();
+        RespBean respBean = RespBean.error(respBeanEnum);
+        out.write(new ObjectMapper().writeValueAsString(respBean));
+        out.flush();
+        out.close();
+    }
+
+    /**
+     * 获取当前登录用户
+     *
+     * @param request
+     * @param response
+     * @return
+     */
+    private User getUser(HttpServletRequest request, HttpServletResponse response) {
+        String ticket = CookieUtil.getCookieValue(request, "userTicket");
+        if (StringUtils.isEmpty(ticket)) {
+            return null;
+        }
+        //获取redis缓存中的用户信息
+        return userService.getUserByCookie(ticket, request, response);
+    }
+}
+
+
+放到 WebConfig 拦截器中
+
+    @Autowired
+    private AccessLimitIntercepter accessLimitIntercepter; //限流拦截器
+
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        //限流拦截器
+        registry.addInterceptor(accessLimitIntercepter);
+    }
+
+
+
+20、ThreadLocal 当前线程上下文
+
+ThreadLocal 的作用：使每个线程绑定自己的值，在秒杀场景的高并发下，线程会非常多，如果在公共线程存储用户信息的话，
+可能会造成用户信息的混乱，所以需要每个用户的信息都存储到自己的线程中，里面的值只能当前线程能看到，其他的线程都访问不了。
+
+其实就是一个 map ，key是当前线程，值就是自己传进去的
+
+public class UserContext {
+
+    private static ThreadLocal<User> userThreadLocal = new ThreadLocal<>();
+
+    public static void setUser(User user) {
+        userThreadLocal.set(user);
+    }
+
+    public static User getUser() {
+        return userThreadLocal.get();
+    }
+}
+
+21、注解的使用方式总结
+
+第5条：自定义注解参数校验，加在属性上，通过 @Constraint(validatedBy = {IsMobileValidator.class})，再实现接口 ConstraintValidator<IsMobile, String> 
+第19条：接口限流，加在方法上，通过反射获取注解对应的值，然后做进一步处理。
+
+要对属性值做校验的适合用  @Constraint(validatedBy = {IsMobileValidator.class})， ConstraintValidator
+要对方法做调用前的拦截处理的用 反射 AccessLimit accessLimit = hm.getMethodAnnotation(AccessLimit.class);
+
+
+22、项目总结
+
+1. 项目框架搭建
+   1. SpringBoot环境搭建
+   2. 集成Thymeleaf,RespBean
+   3. MyBatis
+2. 分布式会话
+   1. 用户登录
+      1. 设计数据库
+      2. 明文密码二次MD5加密
+      3. 参数校验+全局异常处理
+   2. 共享Session
+      1. SpringSession
+      2. Redis
+3. 功能开发
+   1. 商品列表
+   2. 商品详情
+   3. 秒杀
+   4. 订单详情
+4. 系统压测
+   1. JMeter
+   2. 自定义变量模拟多用户
+   3. JMeter命令行的使用
+   4. 正式压测
+      1. 商品列表
+      2. 秒杀
+5. 页面优化
+   1. 页面缓存+URL缓存+对象缓存
+   2. 页面静态化，前后端分离
+   3. 静态资源优化
+   4. CDN优化
+6. 接口优化
+   1. Redis预减库存减少数据库的访问
+   2. 内存标记减少Redis的访问
+   3. RabbitMQ异步下单
+      1. SpringBoot整合RabbitMQ
+      2. 交换机
+7. 安全优化
+   1. 秒杀接口地址隐藏
+   2. 算术验证码
+   3. 接口防刷
+8. 主流的秒杀方案
+
+
+
+
+
+
